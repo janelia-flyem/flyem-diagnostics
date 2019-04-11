@@ -41,7 +41,7 @@ def call_responder(server, endpoint, payload=''):
     except requests.exceptions.RequestException as err:
         LOGGER.critical(err)
         sys.exit(-1)
-    if req.status_code != 200:
+    if req.status_code not in [200, 404]:
         LOGGER.critical('Status: %s', str(req.status_code))
         sys.exit(-1)
     else:
@@ -60,7 +60,7 @@ def fetch_counts(datestruct):
         if data['user'] not in datestruct:
             datestruct[data['user']] = {"cleave": 0, "merge": 0,
                                         "split-supervoxel": 0}
-        if '/cleave?' in data['uri']:
+        if '/cleave/' in data['uri']:
             datestruct[data['user']]['cleave'] += 1
         elif '/merge' in data['uri']:
             datestruct[data['user']]['merge'] += 1
@@ -78,10 +78,23 @@ def process_data():
                                  bootstrap_servers=BROKERS)
     datestruct = dict()
     fetch_counts(datestruct)
+    uts = dict()
+    for sub in CAT_SUBGROUPS:
+        for user in CAT_SUBGROUPS[sub]:
+            uts[user] = sub
     epoch_seconds = time.time()
     for user in sorted(datestruct):
-        payload = {'time': epoch_seconds,
-                   'user': user}
+        payload = {'time': epoch_seconds}
+        wuser = user.split('@')[0]
+        workday = call_responder('config', 'config/workday/' + wuser)
+        payload['user'] = wuser
+        if 'config' in workday:
+            payload['organization'] = workday['config']['organization']
+            if payload['organization'] == 'Connectome Annotation Team':
+                payload['subgroup'] = uts[wuser] if wuser in uts else ''
+        else:
+            LOGGER.warning("Could not find user %s", wuser)
+            payload['organization'] = 'unknown'
         for key in OPERATIONS:
             payload['operation'] = key
             payload['count'] = datestruct[user][key]
@@ -125,6 +138,7 @@ if __name__ == '__main__':
     # Initialize
     CONFIG = call_responder('config', 'config/rest_services')['config']
     BROKERS = call_responder('config', 'config/servers')['config']['Kafka']['broker_list']
+    CAT_SUBGROUPS = call_responder('config', 'config/cat_subgroups')['config']
     # Process messages for last 24 hours
     process_data()
     # Done
