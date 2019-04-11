@@ -1,0 +1,12 @@
+dist: xenial
+language: python
+python:
+  - "3.7"
+before_install:
+  - cd bin
+  - pip install pylint
+# Install dependencies
+install:
+  - pip install -r requirements.txt
+script: 
+  - pylint daily_proofreader_stats.py

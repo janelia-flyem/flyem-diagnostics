@@ -1,9 +1,14 @@
+"""
+daily_proofreader_stats.py
+Retrieve user/operation proofreading stats for the last 24 hours from
+Elasticsearch and publish to a Kafka topic. By default, this only looks
+at stats for emdata4. This can be changed by specyfying an index to read from.
+This program is meant to run once per day (preferably just before midnight).
+"""
 import argparse
 import datetime
-import getpass
 import json
 import sys
-import socket
 import time
 import colorlog
 import requests
@@ -16,9 +21,11 @@ CONFIG = {'config': {'url': 'http://config.int.janelia.org/'}}
 # General
 OPERATIONS = ['cleave', 'merge', 'split-supervoxel']
 
+
 def call_responder(server, endpoint, payload=''):
-    """ Call a responder
-        Keyword arguments:
+    """
+    Call a responder
+    Keyword arguments:
         server: server
         endpoint: REST endpoint
         psyload: POST payload
@@ -41,20 +48,18 @@ def call_responder(server, endpoint, payload=''):
         return req.json()
 
 
-def initialize_program():
-    dbc = call_responder('config', 'config/rest_services')
-    CONFIG = dbc['config']
-    dbc = call_responder('config', 'config/servers')
-    BROKERS = dbc['config']['Kafka']['broker_list']
-    return(CONFIG, BROKERS)
-
-
 def fetch_counts(datestruct):
+    """
+    Fetch operation counts by user
+    Keyword arguments:
+        datestruct: structure for a single timestamp containing users/operation
+    """
     response = call_responder('elasticsearch', 'query/daily_proofreader_hits')
     for rec in response['result']['hits']['hits']:
         data = rec['_source']
         if data['user'] not in datestruct:
-            datestruct[data['user']] = {"cleave": 0, "merge": 0, "split-supervoxel": 0}
+            datestruct[data['user']] = {"cleave": 0, "merge": 0,
+                                        "split-supervoxel": 0}
         if '/cleave?' in data['uri']:
             datestruct[data['user']]['cleave'] += 1
         elif '/merge' in data['uri']:
@@ -64,6 +69,9 @@ def fetch_counts(datestruct):
 
 
 def process_data():
+    """
+    Load information from last 24 hours, filter, and publish to Kafka
+    """
     if ARG.WRITE:
         producer = KafkaProducer(value_serializer=lambda v: json.dumps(v).encode('utf-8'),
                                  key_serializer=lambda v: json.dumps(v).encode('utf-8'),
@@ -83,7 +91,7 @@ def process_data():
                 try:
                     future.get(timeout=10)
                 except KafkaError:
-                    LOGGER.critical("Failed publishing to %s" % (ARG.TOPIC))
+                    LOGGER.critical("Failed publishing to %s", ARG.TOPIC)
             else:
                 LOGGER.info(json.dumps(payload))
 
@@ -91,9 +99,11 @@ def process_data():
 if __name__ == '__main__':
     PARSER = argparse.ArgumentParser(description="Write proofreader daily stats to Kafka topic")
     PARSER.add_argument('--index', dest='INDEX', action='store',
-                        default='emdata4_*dvid_activity-*', help='ES index to read from [emdata4_*dvid_activity-*]')
+                        default='emdata4_*dvid_activity-*',
+                        help='ES index to read from [emdata4_*dvid_activity-*]')
     PARSER.add_argument('--topic', dest='TOPIC', action='store',
-                        default='proofreader_daily_stats', help='Kafka topic to publish to [nptest]')
+                        default='proofreader_daily_stats',
+                        help='Kafka topic to publish to [nptest]')
     PARSER.add_argument('--write', dest='WRITE', action='store_true',
                         default=False, help='Write record to config system')
     PARSER.add_argument('--verbose', dest='VERBOSE', action='store_true',
@@ -112,5 +122,10 @@ if __name__ == '__main__':
     HANDLER = colorlog.StreamHandler()
     HANDLER.setFormatter(colorlog.ColoredFormatter())
     LOGGER.addHandler(HANDLER)
-    (CONFIG, BROKERS) = initialize_program()
+    # Initialize
+    CONFIG = call_responder('config', 'config/rest_services')['config']
+    BROKERS = call_responder('config', 'config/servers')['config']['Kafka']['broker_list']
+    # Process messages for last 24 hours
     process_data()
+    # Done
+    sys.exit(0)
